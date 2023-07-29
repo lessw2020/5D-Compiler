@@ -1,3 +1,6 @@
+# Copyright (c) Meta Platforms, Inc. and its affiliates.
+# All rights reserved.
+
 import torch
 import torch.nn as nn
 import torch.distributed as dist

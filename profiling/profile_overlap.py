@@ -139,21 +139,29 @@ def main():
                 title = split_line(line)
             if "ncclKernel_AllReduce" in line:
                 result = split_line(line)
+                _print(f"{result=}")
+
         for i in range(len(title)):
             if "CUDA total" in title[i]:
                 cuda_total_idx = i
             if "# of Calls" in title[i]:
                 call_times_idx = i
 
+        assert result, f"empty result"
         _print(f"{result=}, \n {len(result)}, {cuda_total_idx=}, {call_times_idx=}\n\n")
-        """allreduce_time = str2time(result[cuda_total_idx]) / int(result[call_times_idx])
+        cuda_totals = result[cuda_total_idx]
+        call_times_totals = result[call_times_idx]
+        _print(f"{cuda_totals=}, {call_times_totals=}")
+
+        allreduce_time = str2time(result[cuda_total_idx]) / int(result[call_times_idx])
+        _print(f"{allreduce_time=}")
         allreduce_time = torch.tensor([allreduce_time]).to(_device)
         torch.distributed.reduce(allreduce_time, 0, op=torch.distributed.ReduceOp.SUM)
         allreduce_time = allreduce_time.cpu().numpy()[0] / world_size
         _print("Average all_reduce time (ms):", allreduce_time)
 
         allreduce_time_list.append(allreduce_time)
-        """
+
         _print("past stats block")
 
     # -------------- main work --------------
@@ -192,7 +200,7 @@ def main():
     # prof.step()
 
     # Profiling allreduce time when not overlapping with computation
-    warmup_allreduce(comm_stream, comm_tensor, num_warmups=allreduce_iters)
+    # warmup_allreduce(comm_stream, comm_tensor, num_warmups=allreduce_iters)
 
     with torch.profiler.profile(
         activities=[torch.profiler.ProfilerActivity.CUDA],
@@ -200,13 +208,16 @@ def main():
         on_trace_ready=trace_handler,
     ) as prof:
         _print("Profiling all_reduce, no overlap ...")
+        warmup_allreduce(comm_stream, comm_tensor, num_warmups=allreduce_iters)
+        prof.step()
+        _print(f"pure all_reduce, warmup profiling done")
 
         with torch.cuda.stream(comm_stream):
             for i in range(allreduce_iters):
                 dist.all_reduce(comm_tensor)
         torch.cuda.Stream.synchronize(comm_stream)
         prof.step()
-
+    _print(f"Success - profiled all_reduce pure mode")
     # profile overlaps...
 
     # Warming up
@@ -218,6 +229,8 @@ def main():
         schedule=torch.profiler.schedule(wait=0, warmup=1, active=1),
         on_trace_ready=trace_handler,
     ) as prof:
+        warmup_allreduce(comm_stream, comm_tensor, num_warmups=allreduce_iters)
+        prof.step()
         with torch.cuda.stream(comm_stream):
             for i in range(allreduce_iters):
                 dist.all_reduce(comm_tensor)

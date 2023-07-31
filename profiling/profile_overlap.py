@@ -127,8 +127,11 @@ def main():
     _print(f"all working!!!")
 
     setup()
+    # if dist.is_initialized():
+    #    torch.cuda.set_device(local_rank)
+
     _device = torch.device(f"cuda:{local_rank}")
-    _print(f"setup complete, {_device=}.")
+    print(f"setup complete, {_device=}.")
     _print(f"inside main {id(_global_allred_time)=}")
     # ----------------------
 
@@ -136,8 +139,8 @@ def main():
         allreduce_time,
         allreduce_time_list,
     ):
-        _print(f"{rank=}, {_global_allred_time=}")
         if not allreduce_time:
+            _print(f"{rank=}, {_global_allred_time=}\n")
             allreduce_time = 100 + local_rank
 
         assert allreduce_time, "empty all_reduce_time"
@@ -157,16 +160,19 @@ def main():
         global _global_allred_time
 
         table = prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=5)
-        # _print(f"{table=}")
+        if rank == 3 or rank == 0:
+            print(f"\n{rank=}, {table=}\n")
         table = table.split("\n")
         # _print(f"{table=}")
         result = []
 
         for line in table:
-            # _print(f"{line=}")
+            # if rank == 0 or rank == 3:
+            #    print(f"{line=}")
             if "Name" in line:
                 title = split_line(line)
             if "ncclKernel_AllReduce" in line:
+                print(f"result found on {rank=}")
                 result = split_line(line)
                 # _print(f"{result=}")
 
@@ -177,6 +183,7 @@ def main():
                 call_times_idx = i
 
         if not result:
+            print(f"{rank=}, ****  empty result in trace handler")
             return
         assert result, f"empty result"
         _print(f"{title=}")
@@ -189,7 +196,8 @@ def main():
         final_allred_time = round(allreduce_time, 5)
         _print(f"{final_allred_time=}")
         _global_allred_time = final_allred_time
-        _print(f"inside trace {_global_allred_time=}")
+
+        print(f"inside trace, {rank=} {_global_allred_time=}")
         _print(f"id {id(_global_allred_time)=}")
 
     # -------------- main work --------------
@@ -219,10 +227,10 @@ def main():
     prof = None
 
     def warmup_allreduce(comm_stream, comm_tensor, num_warmups):
-        _print("Warming up...")
+        print(f"Warming up...{rank=}")
         with torch.cuda.stream(comm_stream):
-            for i in range(allreduce_warmup_iters):
-                dist.all_reduce(comm_tensor)
+            for i in range(num_warmups):
+                dist.all_reduce(comm_tensor, async_op=True)
         torch.cuda.Stream.synchronize(comm_stream)
         _print(f"Warmup completed")
 
@@ -238,22 +246,22 @@ def main():
     ) as prof:
         _print("Profiling all_reduce, no overlap ...")
         warmup_allreduce(comm_stream, comm_tensor, num_warmups=allreduce_iters)
-        # dist.barrier()
+        dist.barrier()
         prof.step()
         _print(f"pure all_reduce, warmup profiling done")
 
         with torch.cuda.stream(comm_stream):
             for i in range(allreduce_iters):
                 dist.all_reduce(comm_tensor, async_op=False)
-        # dist.barrier()
         torch.cuda.Stream.synchronize(comm_stream)
         prof.step()
+        print(f"about to synch pure: {rank=}, {_global_allred_time=}")
+        synch_results(_global_allred_time, allreduce_time_list)
 
     _print(f"Success - profiled all_reduce pure mode")
     dist.barrier()
     _print(f"{id(_global_allred_time)=}")
-    print(f"{_global_allred_time=}")
-    synch_results(_global_allred_time, allreduce_time_list)
+    print(f"{rank=}, after pure allred {_global_allred_time=}")
 
     # profile overlaps...
     _print("Profiling overlapping...")
@@ -269,7 +277,7 @@ def main():
 
         with torch.cuda.stream(comm_stream):
             for i in range(allreduce_iters):
-                dist.all_reduce(comm_tensor, async_op=False)
+                dist.all_reduce(comm_tensor, async_op=True)
 
         with torch.cuda.stream(compute_stream):
             for i in range(compute_iters):

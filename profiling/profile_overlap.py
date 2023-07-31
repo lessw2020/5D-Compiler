@@ -131,21 +131,45 @@ def main():
     # Warming up
     prof = None
 
-    _print("Warming up...")
-    with torch.cuda.stream(comm_stream):
-        for i in range(allreduce_warmup_iters):
-            torch.distributed.all_reduce(comm_tensor)
-    torch.cuda.Stream.synchronize(comm_stream)
+    def warmup_allreduce(comm_stream, comm_tensor, num_warmups):
+        _print("Warming up...")
+        with torch.cuda.stream(comm_stream):
+            for i in range(allreduce_warmup_iters):
+                torch.distributed.all_reduce(comm_tensor)
+        torch.cuda.Stream.synchronize(comm_stream)
+        _print(f"Warmup completed")
+
     # prof.step()
 
     # Profiling allreduce time when not overlapping with computation
 
     _print("Profiling all_reduce, no overlap ...")
+    warmup_allreduce(comm_stream, comm_tensor, num_warmups=allreduce_iters)
+    # prof.step()
+
+    if rank == 0:
+        print("Profiling pure all_reduce...")
     with torch.cuda.stream(comm_stream):
         for i in range(allreduce_iters):
             torch.distributed.all_reduce(comm_tensor)
     torch.cuda.Stream.synchronize(comm_stream)
-    # prof.step()
+    # p.step()
+
+    # profile overlaps...
+
+    # Warming up
+    warmup_allreduce(comm_stream, comm_tensor, num_warmups=allreduce_iters)
+
+    if rank == 0:
+        print("Profiling overlapping...")
+    with torch.cuda.stream(comm_stream):
+        for i in range(allreduce_iters):
+            torch.distributed.all_reduce(comm_tensor)
+    with torch.cuda.stream(compute_stream):
+        for i in range(compute_iters):
+            output = model(compute_tensor)
+    torch.cuda.Stream.synchronize(comm_stream)
+    # p.step()
 
     # -----------------------------------------
 

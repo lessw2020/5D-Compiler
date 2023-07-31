@@ -102,6 +102,9 @@ def str2time(s):
         return float(s[:-1]) * 1e3
 
 
+_global_allred_time = None
+
+
 def main():
     seed = 2020
     # torchrun specific
@@ -134,41 +137,39 @@ def main():
         result = []
 
         for line in table:
-            _print(f"{line=}")
+            # _print(f"{line=}")
             if "Name" in line:
                 title = split_line(line)
             if "ncclKernel_AllReduce" in line:
                 result = split_line(line)
-                _print(f"{result=}")
+                # _print(f"{result=}")
 
         for i in range(len(title)):
             if "CUDA total" in title[i]:
                 cuda_total_idx = i
-            if "# of Calls" in title[i]:
+            elif "# of Calls" in title[i]:
                 call_times_idx = i
 
+        if not result:
+            return
         assert result, f"empty result"
+        _print(f"{title=}")
         _print(f"{result=}, \n {len(result)}, {cuda_total_idx=}, {call_times_idx=}\n\n")
         cuda_totals = result[cuda_total_idx]
         call_times_totals = result[call_times_idx]
-        _print(f"{cuda_totals=}, {call_times_totals=}")
+        _print(f"\n{cuda_totals=}, {call_times_totals=}\n")
 
         allreduce_time = str2time(result[cuda_total_idx]) / int(result[call_times_idx])
-        _print(f"{allreduce_time=}")
-        allreduce_time = torch.tensor([allreduce_time]).to(_device)
-        torch.distributed.reduce(allreduce_time, 0, op=torch.distributed.ReduceOp.SUM)
-        allreduce_time = allreduce_time.cpu().numpy()[0] / world_size
-        _print("Average all_reduce time (ms):", allreduce_time)
-
-        allreduce_time_list.append(allreduce_time)
-
-        _print("past stats block")
+        final_allred_time = round(allreduce_time, 5)
+        _print(f"{final_allred_time=}")
+        _global_allred_time = final_allred_time
 
     # -------------- main work --------------
     model = nn.Linear(4096, 4096, bias=False).to(_device)
 
     compute_tensor = torch.randn((1024, 4096), device=_device)
     comm_tensor = torch.randn((4096, 4096), device=_device)
+    comm_tensor2 = torch.randn((4096, 4096), device=_device)
 
     compute_iters = 4096
     allreduce_iters = 30
@@ -193,7 +194,7 @@ def main():
         _print("Warming up...")
         with torch.cuda.stream(comm_stream):
             for i in range(allreduce_warmup_iters):
-                torch.distributed.all_reduce(comm_tensor)
+                dist.all_reduce(comm_tensor)
         torch.cuda.Stream.synchronize(comm_stream)
         _print(f"Warmup completed")
 
@@ -209,20 +210,20 @@ def main():
     ) as prof:
         _print("Profiling all_reduce, no overlap ...")
         warmup_allreduce(comm_stream, comm_tensor, num_warmups=allreduce_iters)
+        # dist.barrier()
         prof.step()
         _print(f"pure all_reduce, warmup profiling done")
 
         with torch.cuda.stream(comm_stream):
             for i in range(allreduce_iters):
-                dist.all_reduce(comm_tensor)
+                dist.all_reduce(comm_tensor, async_op=True)
+        # dist.barrier()
         torch.cuda.Stream.synchronize(comm_stream)
         prof.step()
+
     _print(f"Success - profiled all_reduce pure mode")
+
     # profile overlaps...
-
-    # Warming up
-    warmup_allreduce(comm_stream, comm_tensor, num_warmups=allreduce_iters)
-
     _print("Profiling overlapping...")
     with torch.profiler.profile(
         activities=[torch.profiler.ProfilerActivity.CUDA],
@@ -230,13 +231,19 @@ def main():
         on_trace_ready=trace_handler,
     ) as prof:
         warmup_allreduce(comm_stream, comm_tensor, num_warmups=allreduce_iters)
+        # dist.barrier()
         prof.step()
+        _print(f"past overlap warmup...")
+
         with torch.cuda.stream(comm_stream):
             for i in range(allreduce_iters):
-                dist.all_reduce(comm_tensor)
+                dist.all_reduce(comm_tensor, async_op=True)
+
         with torch.cuda.stream(compute_stream):
             for i in range(compute_iters):
                 output = model(compute_tensor)
+
+        # dist.barrier()
         torch.cuda.Stream.synchronize(comm_stream)
         prof.step()
 

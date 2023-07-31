@@ -103,10 +103,12 @@ def str2time(s):
 
 
 _global_allred_time = None
+print(f"{id(_global_allred_time)=}")
 
 
 def main():
     seed = 2020
+
     # torchrun specific
     local_rank = int(os.environ["LOCAL_RANK"])
     rank = int(os.environ["RANK"])
@@ -126,10 +128,34 @@ def main():
 
     setup()
     _device = torch.device(f"cuda:{local_rank}")
-    _print("setup complete.")
+    _print(f"setup complete, {_device=}.")
+    _print(f"inside main {id(_global_allred_time)=}")
+    # ----------------------
+
+    def synch_results(
+        allreduce_time,
+        allreduce_time_list,
+    ):
+        _print(f"{rank=}, {_global_allred_time=}")
+        if not allreduce_time:
+            allreduce_time = 100 + local_rank
+
+        assert allreduce_time, "empty all_reduce_time"
+        allreduce_time = torch.tensor([allreduce_time], device=_device)
+        dist.reduce(allreduce_time, 0, op=dist.ReduceOp.SUM)
+        allreduce_time = allreduce_time.cpu().numpy()[0] / world_size
+
+        if local_rank == 0:
+            print("Average allreduce time (ms):", allreduce_time)
+            allreduce_time_list.append(allreduce_time)
+        print(f"End test")
 
     # trace handler
-    def trace_handler(prof):
+    def trace_handler(
+        prof,
+    ):
+        global _global_allred_time
+
         table = prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=5)
         # _print(f"{table=}")
         table = table.split("\n")
@@ -163,6 +189,8 @@ def main():
         final_allred_time = round(allreduce_time, 5)
         _print(f"{final_allred_time=}")
         _global_allred_time = final_allred_time
+        _print(f"inside trace {_global_allred_time=}")
+        _print(f"id {id(_global_allred_time)=}")
 
     # -------------- main work --------------
     model = nn.Linear(4096, 4096, bias=False).to(_device)
@@ -216,12 +244,16 @@ def main():
 
         with torch.cuda.stream(comm_stream):
             for i in range(allreduce_iters):
-                dist.all_reduce(comm_tensor, async_op=True)
+                dist.all_reduce(comm_tensor, async_op=False)
         # dist.barrier()
         torch.cuda.Stream.synchronize(comm_stream)
         prof.step()
 
     _print(f"Success - profiled all_reduce pure mode")
+    dist.barrier()
+    _print(f"{id(_global_allred_time)=}")
+    print(f"{_global_allred_time=}")
+    synch_results(_global_allred_time, allreduce_time_list)
 
     # profile overlaps...
     _print("Profiling overlapping...")
@@ -237,7 +269,7 @@ def main():
 
         with torch.cuda.stream(comm_stream):
             for i in range(allreduce_iters):
-                dist.all_reduce(comm_tensor, async_op=True)
+                dist.all_reduce(comm_tensor, async_op=False)
 
         with torch.cuda.stream(compute_stream):
             for i in range(compute_iters):
@@ -246,6 +278,8 @@ def main():
         # dist.barrier()
         torch.cuda.Stream.synchronize(comm_stream)
         prof.step()
+    dist.barrier()
+    synch_results(_global_allred_time, allreduce_time_list)
 
     # -----------------------------------------
 

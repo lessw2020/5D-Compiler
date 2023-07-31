@@ -28,7 +28,7 @@ import os, sys
 
 sys.path.insert(0, "..")
 sys.path.insert(0, "../..")
-from utils import read_json_config, write_json_config
+# from utils import read_json_config, write_json_config
 
 # _none_context = contextlib.nullcontext()
 
@@ -103,7 +103,51 @@ def main():
     _print(f"all working!!!")
 
     setup()
+    _device = torch.device(f"cuda:{local_rank}")
     _print("setup complete.")
+
+    # -------------- main work --------------
+    model = nn.Linear(4096, 4096, bias=False).to(_device)
+
+    compute_tensor = torch.randn((1024, 4096), device=_device)
+    comm_tensor = torch.randn((4096, 4096), device=_device)
+
+    compute_iters = 4096
+    allreduce_iters = 30
+
+    allreduce_warmup_iters = 10
+
+    comm_stream = torch.cuda.Stream()
+    compute_stream = torch.cuda.current_stream()
+
+    torch.cuda.Stream.synchronize(compute_stream)
+
+    allreduce_time_list = []
+
+    # start testing
+
+    # --- all reduce, no overlap
+
+    # Warming up
+    prof = None
+
+    _print("Warming up...")
+    with torch.cuda.stream(comm_stream):
+        for i in range(allreduce_warmup_iters):
+            torch.distributed.all_reduce(comm_tensor)
+    torch.cuda.Stream.synchronize(comm_stream)
+    # prof.step()
+
+    # Profiling allreduce time when not overlapping with computation
+
+    _print("Profiling all_reduce, no overlap ...")
+    with torch.cuda.stream(comm_stream):
+        for i in range(allreduce_iters):
+            torch.distributed.all_reduce(comm_tensor)
+    torch.cuda.Stream.synchronize(comm_stream)
+    # prof.step()
+
+    # -----------------------------------------
 
     _print(f"exiting...")
     cleanup()

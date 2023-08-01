@@ -251,7 +251,7 @@ def main():
 
         with torch.cuda.stream(comm_stream):
             for i in range(allreduce_iters):
-                dist.all_reduce(comm_tensor, async_op=False)
+                dist.all_reduce(comm_tensor, async_op=True)
         torch.cuda.Stream.synchronize(comm_stream)
         prof.step()
         # print(f"about to synch pure: {rank=}, {_global_allred_time=}")

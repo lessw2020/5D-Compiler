@@ -228,10 +228,24 @@ def main():
 
     def warmup_allreduce(comm_stream, comm_tensor, num_warmups):
         print(f"Warming up...{rank=}")
+        pre_sentinel = comm_tensor[0][0].item()
+        print(f"Data sentinel before, {rank=}, {comm_tensor[0][0]=}")
         with torch.cuda.stream(comm_stream):
             for i in range(num_warmups):
                 dist.all_reduce(comm_tensor, async_op=True)
         torch.cuda.Stream.synchronize(comm_stream)
+        post_sentinel = comm_tensor[0][0].item()
+        print(f"Data sentinel after, {rank=}, {comm_tensor[0][0]=}")
+        if pre_sentinel == post_sentinel:
+            print(
+                f"\n***** failed to allred after synch on rank {rank}, {pre_sentinel=}, {post_sentinel=}, {comm_tensor[0][0]=}"
+            )
+        dist.barrier()
+        if pre_sentinel == post_sentinel:
+            print(
+                f"\n***** failed to allred after barrier on rank {rank}, {pre_sentinel=}, {post_sentinel=}, {comm_tensor[0][0]=}"
+            )
+
         _print(f"Warmup completed")
 
     # prof.step()
@@ -241,7 +255,8 @@ def main():
     with torch.profiler.profile(
         activities=[torch.profiler.ProfilerActivity.CUDA],
         schedule=torch.profiler.schedule(wait=0, warmup=1, active=1),
-        on_trace_ready=trace_handler,
+        # on_trace_ready=trace_handler,
+        # on_trace_ready=torch.profiler.tensorboard_trace_handler("pure_allred"),
     ) as prof:
         _print("Profiling all_reduce, no overlap ...")
         warmup_allreduce(comm_stream, comm_tensor, num_warmups=allreduce_iters)
@@ -268,9 +283,10 @@ def main():
     with torch.profiler.profile(
         activities=[torch.profiler.ProfilerActivity.CUDA],
         schedule=torch.profiler.schedule(wait=0, warmup=1, active=1),
-        on_trace_ready=trace_handler,
+        # on_trace_ready=trace_handler,
+        # on_trace_ready=torch.profiler.tensorboard_trace_handler("trace_overlap"),
     ) as prof:
-        warmup_allreduce(comm_stream, comm_tensor, num_warmups=allreduce_iters)
+        warmup_allreduce(comm_stream, comm_tensor2, num_warmups=allreduce_iters)
         dist.barrier()
         prof.step()
         _print(f"past overlap warmup...")

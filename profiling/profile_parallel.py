@@ -36,6 +36,25 @@ def setup_tasks(
     setup_environ_flags(rank)
 
 
+class PreModuleSynch(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = nn.Linear(1, 1)
+
+    def forward(self, hidden_states):
+        return hidden_states
+
+
+class PreMLP(nn.Module):
+    def __init__(self, linear_dim: int = 1024):
+        super().__init__()
+        self.linear = nn.Linear(linear_dim, linear_dim)
+
+    def forward(self, hidden_states):
+        hidden_states = self.linear(hidden_states)
+        return hidden_states
+
+
 def main():
     seed = 2020
 

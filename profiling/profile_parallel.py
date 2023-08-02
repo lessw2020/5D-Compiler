@@ -13,6 +13,7 @@ import time
 import numpy as np
 import random
 
+from config_parallel import ParallelConfig
 
 from profiling_utils import (
     seed_all,
@@ -24,7 +25,10 @@ from profiling_utils import (
 )
 
 
-def setup_tasks(rank, world_size, cfg):
+def setup_tasks(
+    rank,
+    world_size,
+):
     """keep the basic setup list here"""
     setup()
     clear_gpu_cache(rank)  # need to call torch set device first?
@@ -47,6 +51,9 @@ def main():
     setup_tasks(rank=rank, world_size=world_size)
 
     _print = RankPrint(rank=local_rank, rank_to_print=0)
+
+    cfg = ParallelConfig()
+    _print(f"{cfg=}")
 
     cleanup()
 

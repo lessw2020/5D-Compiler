@@ -56,12 +56,11 @@ class PreMLP(nn.Module):
 
 
 def group_all_reduce(input, group):
-    """All-reduce the the input tensor across model parallel group."""
+    """all_reduce across model parallel group."""
 
     if dist.get_world_size(group=group) == 1:
         return input
 
-    # All-reduce.
     dist.all_reduce(input.contiguous(), group=group)
 
     return input

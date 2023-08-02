@@ -55,6 +55,18 @@ class PreMLP(nn.Module):
         return hidden_states
 
 
+def group_all_reduce(input, group):
+    """All-reduce the the input tensor across model parallel group."""
+
+    if dist.get_world_size(group=group) == 1:
+        return input
+
+    # All-reduce.
+    dist.all_reduce(input.contiguous(), group=group)
+
+    return input
+
+
 def main():
     seed = 2020
 

@@ -1,4 +1,7 @@
-#
+## Copyright (c) Meta Platforms, Inc. and its affiliates.
+# All rights reserved.
+# code based on: https://github.com/Hsword/Hetu/tree/main/tools/Galvatron
+
 import time
 import tqdm
 import torch

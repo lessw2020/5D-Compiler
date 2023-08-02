@@ -76,11 +76,12 @@ def setup_tasks(rank, world_size, cfg):
 
 
 class ZeroPrint:
-    def __init__(self, rank):
+    def __init__(self, rank, rank_to_print: int = 0):
         self.rank = rank
+        self.rank_to_print = rank_to_print
 
     def __call__(self, msg):
-        if self.rank == 0:
+        if self.rank == self.rank_to_print:
             print(f"{msg}")
 
 

@@ -3,6 +3,7 @@
 # code based on: https://github.com/Hsword/Hetu
 
 import torch.distributed as dist
+from .allgather_utils import gather_from_tp_region_group
 
 
 def show_groups(groups):
@@ -31,7 +32,7 @@ class CommGroup(object):
         return False
 
     def allgather(self, input):
-        return gather_from_tensor_model_parallel_region_group(input, self.group)
+        return gather_from_tp_region_group(input, self.group)
 
     def print(self):
         print(self.ranks, end=" ")
@@ -52,6 +53,140 @@ class SliceFunc(object):
         print(f"{self.local_rank}/{self.n}", end=" ")
 
 
+def gen_tp_group(tp_size, to_print=True, consecutive=True):
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    all_tp_groups = []
+    print(f"tp group, rank={rank}, {tp_size=}")
+
+    if consecutive:
+        for i in range(world_size // tp_size):
+            ranks = range(i * tp_size, (i + 1) * tp_size)
+            group = CommGroup(ranks)
+            all_tp_groups.append(group)
+
+            if group.has_rank(rank):
+                tp_group = group
+    else:
+        start_rank = 0
+        end_rank = world_size
+        dp_size = world_size // tp_size
+        for j in range(dp_size):
+            ranks = range(start_rank + j, end_rank, dp_size)
+            group = CommGroup(ranks)
+            all_tp_groups.append(group)
+            if group.has_rank(rank):
+                tp_group = group
+
+    if rank == 0 and to_print:
+        print("TP groups:", end=" ")
+        show_groups(all_tp_groups)
+
+    return tp_group
+
+
+def gen_dp_group(tp_size, to_print=True, consecutive=False):
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    start_rank = 0
+    end_rank = world_size
+    all_dp_groups = []
+
+    if not consecutive:
+        for j in range(tp_size):
+            ranks = range(start_rank + j, end_rank, tp_size)
+            group = CommGroup(ranks)
+            all_dp_groups.append(group)
+            if group.has_rank(rank):
+                dp_group = group
+    else:
+        dp_size = world_size // tp_size
+        for i in range(tp_size):
+            ranks = range(i * dp_size, (i + 1) * dp_size)
+            group = CommGroup(ranks)
+            all_dp_groups.append(group)
+            if group.has_rank(rank):
+                dp_group = group
+
+    if rank == 0 and to_print:
+        print("DP groups:", end=" ")
+        show_groups(all_dp_groups)
+    return dp_group
+
+
+def gen_slice_func(
+    tp_size_old, tp_size_new, tp_consec_old, tp_consec_new, tp_group_old
+):
+    world_size = dist.get_world_size()
+    case0 = tp_size_new > tp_size_old
+    case1 = tp_size_new == tp_size_old and tp_consec_new != tp_consec_old
+    case2 = (
+        world_size == 8
+        and tp_size_old == 4
+        and tp_size_new == 2
+        and tp_consec_new != tp_consec_old
+    )
+    if case0 or case1 or case2:
+        slice_num = tp_size_old
+        local_rank = tp_group_old.intra_group_id
+        return SliceFunc(slice_num, local_rank)
+    elif tp_size_new < tp_size_old:
+        slice_num = tp_size_old // tp_size_new
+        if tp_consec_new and tp_consec_old:
+            local_rank = (dist.get_rank() // tp_size_new) % slice_num
+        else:
+            local_rank = (dist.get_rank() % (world_size // tp_size_new)) // (
+                world_size // tp_size_old
+            )
+        return SliceFunc(slice_num, local_rank)
+    return None
+
+
+def get_dp_sizes_from_tp_sizes(all_tp_sizes):
+    all_dp_sizes = []
+    world_size = dist.get_world_size()
+    for i in range(len(all_tp_sizes)):
+        all_dp_sizes.append(world_size // all_tp_sizes[i])
+    return all_dp_sizes
+
+
+def get_tp_group_dict(all_tp_sizes, consecutive=True):
+    tp_sizes_set = list(set(all_tp_sizes))
+    tp_group_dict = {}
+    for tp_size in tp_sizes_set:
+        tp_group_dict[tp_size] = gen_tp_group(
+            tp_size, to_print=False, consecutive=consecutive
+        )
+    return tp_group_dict
+
+
+def get_dp_group_dict(all_tp_sizes, consecutive=False):
+    tp_sizes_set = list(set(all_tp_sizes))
+    dp_group_dict = {}
+    for tp_size in tp_sizes_set:
+        dp_group_dict[tp_size] = gen_dp_group(
+            tp_size, to_print=False, consecutive=consecutive
+        )
+    return dp_group_dict
+
+
+def gen_allgather_group(
+    tp_size_old, tp_size_new, tp_consec_old, tp_consec_new, tp_group_new
+):
+    world_size = dist.get_world_size()
+    case0 = tp_size_new > tp_size_old
+    case1 = tp_size_new == tp_size_old and tp_consec_new != tp_consec_old
+    case2 = (
+        world_size == 8
+        and tp_size_old == 4
+        and tp_size_new == 2
+        and tp_consec_new != tp_consec_old
+    )
+    if case0 or case1 or case2:
+        return tp_group_new
+    return None
+
+
 def gen_groups(all_tp_sizes, tp_consecutive_flags, show_rank=-1):
     world_size = dist.get_world_size()
     for i in range(len(all_tp_sizes)):
@@ -63,8 +198,10 @@ def gen_groups(all_tp_sizes, tp_consecutive_flags, show_rank=-1):
     dp_groups = []
     allgather_groups = [None]
     slice_funcs = [None]
+
     tp_group_dict_consec = get_tp_group_dict(all_tp_sizes, True)
     tp_group_dict_inconsec = get_tp_group_dict(all_tp_sizes, False)
+
     dp_group_dict_consec = get_dp_group_dict(all_tp_sizes, True)
     dp_group_dict_inconsec = get_dp_group_dict(all_tp_sizes, False)
 
@@ -96,7 +233,7 @@ def gen_groups(all_tp_sizes, tp_consecutive_flags, show_rank=-1):
                 tp_groups[i - 1],
             )
         )
-    if show_rank >= 0 and dist.get_rank() == show_rank:
+    if show_rank > -1 and dist.get_rank() == show_rank:
         print("-------- 5D Communication Group -------")
         print(f"TP groups for rank {show_rank} (all layers):")
         show_groups(tp_groups)

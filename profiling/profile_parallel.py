@@ -25,6 +25,13 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
+import sys
+
+sys.path.append("..")
+sys.path.append("../..")
+
+from parallel_utils.comm_utils import gen_groups
+
 
 def setup_tasks(
     rank,
@@ -173,30 +180,31 @@ def main():
     all_tp_sizes = [cfg.tp_degree] * 24
     tp_consecutive_flags = [cfg.tp_consecutive] * 24
     tp_groups, _, _, _ = gen_groups(all_tp_sizes, tp_consecutive_flags)
+    _print(f"{tp_groups=}")
 
     model = nn.Sequential()
-    model.add_module('pre_sync_module', PreModuleSynch())
-    model.add_module('pre_mlp', PreMLP())
+    model.add_module("pre_sync_module", PreModuleSynch())
+    model.add_module("pre_mlp", PreMLP())
     for i in range(len(all_tp_sizes)):
         module = AllReduceBlock(tp_group=tp_groups[i])
-        _print(f"adding module {}")
-        model.add_module('mlp_%d'%i, module)
+        _print(f"adding module mlp_{i}")
+        model.add_module(f"mlp_{i}", module)
 
     avg_num_layers = cfg.model_num_layers // cfg.pp_degree
 
     pp_degree = cfg.pp_degree
-    
+
     pp_ranks_enc = []
     for i in range(pp_degree):
         pp_ranks_enc += [i] * avg_num_layers
-    
+
     devices = [i * world_size + rank for i in range(pp_degree)]
     _print(f"{devices=}")
     pp_devices = [devices[i] for i in pp_ranks_enc]
-    model[0] = DDP(model[0].cuda(devices[0])) # for sync
+    model[0] = DDP(model[0].cuda(devices[0]))  # for sync
     model[1] = model[1].cuda(devices[0])
     for i in range(len(all_tp_sizes)):
-        model[i+2] = model[i+2].cuda(pp_devices[i])
+        model[i + 2] = model[i + 2].cuda(pp_devices[i])
 
     # * --------------  End Training -------------
     print(f"Cleaning up and exiting, rank {rank}")

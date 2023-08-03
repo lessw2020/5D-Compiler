@@ -2,27 +2,28 @@
 # All rights reserved.
 # code based on: https://github.com/Hsword/Hetu/tree/main/tools/Galvatron
 
-import torch
-import torch.nn as nn
-import torch.distributed as dist
-
 import argparse
 import os
+import random
 import time
 
 import numpy as np
-import random
-
+import torch
+import torch.distributed as dist
+import torch.distributed.rpc as rpc
+import torch.nn as nn
 from config_parallel import ParallelConfig
-
 from profiling_utils import (
-    seed_all,
     RankPrint,
-    setup,
     cleanup,
-    setup_environ_flags,
     clear_gpu_cache,
+    seed_all,
+    setup,
+    setup_environ_flags,
 )
+from torch.optim import AdamW
+from torch.utils.data import DataLoader, Dataset
+from torch.utils.data.distributed import DistributedSampler
 
 
 def setup_tasks(
@@ -66,6 +67,71 @@ def group_all_reduce(input, group):
     return input
 
 
+class ReduceModelParallelRegion(torch.autograd.Function):
+    """All_reduce the input from the model parallel region."""
+
+    @staticmethod
+    def forward(ctx, input, group):
+        return group_all_reduce(input, group)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output, None
+
+
+class CopyToModelParallelRegion(torch.autograd.Function):
+    """Pass the input to the model parallel region."""
+
+    @staticmethod
+    def forward(ctx, input, group):
+        ctx.group = group
+        return input
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return group_all_reduce(grad_output, ctx.group), None
+
+
+def reduce_from_tensor_model_parallel_region_group(input, group):
+    return ReduceModelParallelRegion.apply(input, group)
+
+
+def copy_to_tensor_model_parallel_region_group(input, group):
+    return CopyToModelParallelRegion.apply(input, group)
+
+
+class AllReduceBlock(nn.Module):
+    def __init__(self, tp_group):
+        super().__init__()
+        self.tp_group = tp_group
+        self.linear = nn.Linear(1024, 1024)
+
+    def forward(self, hidden_states):
+        hidden_states = copy_to_tensor_model_parallel_region_group(
+            hidden_states, self.tp_group.group
+        )
+        hidden_states = reduce_from_tensor_model_parallel_region_group(
+            hidden_states, self.tp_group.group
+        )
+        return hidden_states
+
+
+class DataLoaderRandom(Dataset):
+    def __init__(self, cfg):
+        self.dataset_size = cfg.bs_local * 8 * 11 // cfg.pp_degree
+        # self.input = np.random.randint(0, 100, size=(self.dataset_size, 512, 1024))
+        self.input = np.ones((self.dataset_size, 512, 1024))
+
+    def __len__(self):
+        return self.dataset_size
+
+    def __getitem__(self, idx):
+        if idx >= self.dataset_size:
+            raise IndexError
+        input = torch.FloatTensor(self.input[idx])
+        return input
+
+
 def main():
     seed = 2020
 
@@ -85,6 +151,31 @@ def main():
     cfg = ParallelConfig()
     _print(f"{cfg=}")
 
+    # * --------------  Training ----------------
+
+    rpc.init_rpc(
+        name="worker%d" % rank,
+        rank=rank,
+        world_size=world_size,
+    )
+
+    dataset = DataLoaderRandom(cfg)
+    _print(f"{dataset=}")
+
+    trainloader = DataLoader(
+        dataset=dataset,
+        batch_size=cfg.bs_local,
+        sampler=DistributedSampler(dataset, shuffle=False),
+    )
+
+    _print(f"len of trainloader {len(trainloader)}")
+
+    all_tp_sizes = [cfg.tp_degree] * 24
+    tp_consecutive_flags = [cfg.tp_consecutive] * 24
+    tp_groups, _, _, _ = gen_groups(all_tp_sizes, tp_consecutive_flags)
+
+    # * --------------  End Training -------------
+    print(f"Cleaning up and exiting, rank {rank}")
     cleanup()
 
 

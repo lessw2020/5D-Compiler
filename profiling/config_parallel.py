@@ -11,7 +11,7 @@ from dataclasses import dataclass
 @dataclass
 class ParallelConfig:
     # Global tp degree  [-1, 1, 2, 4, 8, 16]
-    tp_degree: int = 4
+    tp_degree: int = 2
     # Global tp consecutive [-1]
     tp_consecutive: int = 1
     # Pipeline parallel degree, [1, 2, 4, 8, 16]

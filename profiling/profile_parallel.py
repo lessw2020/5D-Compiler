@@ -25,6 +25,7 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.distributed.pipeline.sync import Pipe
 import sys
 
 sys.path.append("..")
@@ -161,7 +162,7 @@ def main():
     # * --------------  Training ----------------
 
     rpc.init_rpc(
-        name="worker%d" % rank,
+        name=f"worker{rank}",
         rank=rank,
         world_size=world_size,
     )
@@ -206,8 +207,29 @@ def main():
     for i in range(len(all_tp_sizes)):
         model[i + 2] = model[i + 2].cuda(pp_devices[i])
 
+    model = Pipe(model, chunks=1, checkpoint="never")
+
+    optimizer = AdamW(model.parameters(), lr=0.01, weight_decay=0.01)
+
+    # Calculate theoretical communication message size
+    tp_size = cfg.tp_degree
+    pp_size = cfg.pp_degree
+    dp_size = world_size // tp_size
+    bs = cfg.bs_local
+
+    allreduce_message_size_per_layer = (
+        2 * (tp_size - 1) / tp_size * (bs * 512 * 1024 * 2 * 4 / 1024 / 1024)
+    )
+    allreduce_message_size_total = allreduce_message_size_per_layer * 24
+
+    _print(f"Strategy: {pp_size}_{tp_size}_{cfg.tp_consecutive}")
+    _print(
+        f"[allreduce_message_size]: per_layer {allreduce_message_size_per_layer} MB, total {allreduce_message_size_total} MB"
+    )
+
     # * --------------  End Training -------------
-    print(f"Cleaning up and exiting, rank {rank}")
+    dist.barrier()
+    print(f"\nCleaning up and exiting, rank {rank}")
     cleanup()
 
 

@@ -34,6 +34,11 @@ sys.path.append("../..")
 
 from parallel_utils.comm_utils import gen_groups
 
+import colorama
+from colorama import Fore, Style
+
+colorama.init(autoreset=True)
+
 
 def setup_tasks(
     rank,
@@ -264,17 +269,21 @@ def main():
                     cuda_total_idx = i
             allreduce_time_24_layer = str2time(result[cuda_total_idx]) / 10
             comm_coe = allreduce_time_24_layer / allreduce_message_size_total
+            inverse_comm_coe = allreduce_message_size_total / allreduce_time_24_layer
 
-            _print(f"Strategy: {pp_size}_{tp_size}_{cfg.tp_consecutive}")
+            _print(
+                f"{Fore.LIGHTBLUE_EX}Strategy:{Style.RESET_ALL} {pp_size}_{tp_size}_{cfg.tp_consecutive}"
+            )
             _print(
                 f"[allreduce_message_size]: per_layer {allreduce_message_size_per_layer} MB, \ntotal {allreduce_message_size_total} MB"
             )
-            print("----  Communication Coefficient ------- ")
+            print(Fore.LIGHTBLUE_EX + "----  Communication Coefficient ------- ")
             print(
-                f" Parallelism:  Pipeline {pp_size}, Tensor {tp_size}, Consecutive {cfg.tp_consecutive}"
+                Fore.LIGHTBLUE_EX
+                + f" Parallelism:  {Style.RESET_ALL} Pipeline {Fore.GREEN} {pp_size}{Style.RESET_ALL}, Tensor {Fore.GREEN}{tp_size}{Style.RESET_ALL}, Consecutive {Fore.GREEN} {cfg.tp_consecutive}"
             )
             print(
-                f"comm_coe_{pp_size}_{tp_size}_{cfg.tp_consecutive} (ms/MB): {comm_coe}"
+                f"comm_coe: {pp_size}_{tp_size}_{cfg.tp_consecutive}\n{Fore.LIGHTBLUE_EX}(ms/MB - minimize): {Fore.RED}{comm_coe} {Style.RESET_ALL}\n{Fore.LIGHTBLUE_EX}(MB/ms - maximize):{Fore.GREEN} {inverse_comm_coe}"
             )
             print("----------------------------------------")
 

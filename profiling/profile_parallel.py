@@ -27,6 +27,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed.pipeline.sync import Pipe
 import sys
+from tqdm import tqdm
 
 sys.path.append("..")
 sys.path.append("../..")
@@ -155,7 +156,8 @@ def main():
     setup_tasks(rank=rank, world_size=world_size)
 
     _print = RankPrint(rank=local_rank, rank_to_print=0)
-
+    device = torch.device("cuda", rank)
+    _print(f"{device=}")
     cfg = ParallelConfig()
     _print(f"{cfg=}")
 
@@ -224,8 +226,85 @@ def main():
 
     _print(f"Strategy: {pp_size}_{tp_size}_{cfg.tp_consecutive}")
     _print(
-        f"[allreduce_message_size]: per_layer {allreduce_message_size_per_layer} MB, total {allreduce_message_size_total} MB"
+        f"[allreduce_message_size]: per_layer {allreduce_message_size_per_layer} MB, \ntotal {allreduce_message_size_total} MB"
     )
+
+    def trace_handler(prof):
+        if rank == 0:
+            table = prof.key_averages().table(
+                sort_by="self_cuda_time_total", row_limit=5
+            )
+            print(table)
+            table = table.split("\n")
+
+            def split_line(line):
+                line = line.split("  ")
+                ls = []
+                for s in line:
+                    if len(s):
+                        ls.append(s.strip())
+                return ls
+
+            def str2time(s):
+                if "ms" in s:
+                    return float(s[:-2])
+                elif "us" in s:
+                    return float(s[:-2]) * 1e-3
+                else:
+                    return float(s[:-1]) * 1e3
+
+            for line in table:
+                if "Name" in line:
+                    title = split_line(line)
+                if "ncclKernel_AllReduce" in line:
+                    result = split_line(line)
+            for i in range(len(title)):
+                # print('%s: %s'%(title[i],result[i]))
+                if "CUDA total" in title[i]:
+                    cuda_total_idx = i
+            allreduce_time_24_layer = str2time(result[cuda_total_idx]) / 10
+            comm_coe = allreduce_time_24_layer / allreduce_message_size_total
+
+            _print(f"Strategy: {pp_size}_{tp_size}_{cfg.tp_consecutive}")
+            _print(
+                f"[allreduce_message_size]: per_layer {allreduce_message_size_per_layer} MB, \ntotal {allreduce_message_size_total} MB"
+            )
+            print("----  Communication Coefficient ------- ")
+            print(
+                f" Parallelism:  Pipeline {pp_size}, Tensor {tp_size}, Consecutive {cfg.tp_consecutive}"
+            )
+            print(
+                f"comm_coe_{pp_size}_{tp_size}_{cfg.tp_consecutive} (ms/MB): {comm_coe}"
+            )
+            print("----------------------------------------")
+
+            comm_type = "allreduce"
+            gpu_num = world_size * pp_size
+            env_config_path = "../../env_configs/%s_bandwidth_%d_gpus.json" % (
+                comm_type,
+                gpu_num,
+            )
+            config = (
+                dict()
+            )  # read_json_config(env_config_path) if os.path.exists(env_config_path) else dict()
+            key = "%d_%d_%d" % (pp_size, tp_size, cfg.tp_consecutive)
+            config[key] = comm_coe
+            # write_json_config(config, env_config_path)
+            # print('Already written comm_coe_%s into env config file %s!'%(key, env_config_path))
+
+    with torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CUDA],
+        schedule=torch.profiler.schedule(wait=0, warmup=1, active=10),
+        on_trace_ready=trace_handler,
+    ) as p:
+        for i, input in enumerate(tqdm(trainloader)):
+            input = input.to(device)
+            out = model(input)
+            loss = out.local_value().sum()
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            p.step()
 
     # * --------------  End Training -------------
     dist.barrier()

@@ -277,7 +277,7 @@ def main():
             _print(
                 f"[allreduce_message_size]: per_layer {allreduce_message_size_per_layer} MB, \ntotal {allreduce_message_size_total} MB"
             )
-            print(Fore.LIGHTBLUE_EX + "----  Communication Coefficient ------- ")
+            print(Fore.LIGHTCYAN_EX + "----  Communication Coefficient ------- ")
             print(
                 Fore.LIGHTBLUE_EX
                 + f" Parallelism:  {Style.RESET_ALL} Pipeline {Fore.GREEN} {pp_size}{Style.RESET_ALL}, Tensor {Fore.GREEN}{tp_size}{Style.RESET_ALL}, Consecutive {Fore.GREEN} {cfg.tp_consecutive}"

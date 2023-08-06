@@ -247,10 +247,10 @@ class PipelineParallel(nn.Module):
 
         if self.info:
             print(f"{self.global_rank}, starting pipeline forward")
-        
+
         # Forward passes
         for i in range(self.num_microbatches):
-            if i == self.num_microbatches-1:
+            if i == self.num_microbatches - 1:
                 recv_tensor_shapes = self.stage_input_tensor_shape_last
                 send_tensor_shapes = self.stage_output_tensor_shape_last
             else:
@@ -259,51 +259,60 @@ class PipelineParallel(nn.Module):
             recv_tensor_dtypes = self.stage_input_tensor_dtype
             send_tensor_dtypes = self.stage_output_tensor_dtype
 
-            input_tensor =self.recv_forward_multi(tensor_shapes = recv_tensor_shapes, dtypes = recv_tensor_dtypes)
+            input_tensor = self.recv_forward_multi(
+                tensor_shapes=recv_tensor_shapes, dtypes=recv_tensor_dtypes
+            )
             cur_microbatch = [microbatches[0][i], microbatches[1][i]]
 
             if self.num_microbatches > 1:
-
-
-    """
-    
-             cur_microbatch = [microbatches[0][i], microbatches[1][i]]
-
-            if self.num_microbatches > 1:
                 for m in self.model_cur_stage.modules():
-                    # For DDP module, we need to disable gradient sync for accumulation, 
-                    #   and set sync manually before backward of the last microbatch.
+                    # For DDP module, disable grad sync for accumulation and manually sync before
+                    # backward of last microbatch
                     if isinstance(m, DDP) and i == 0:
                         m.require_backward_grad_sync = False
-            
+
             output_tensor = self.forward_step(
-                forward_step_func,
-                cur_microbatch,
-                model,
-                input_tensor,
-                losses_reduced,
+                forward_step_func, cur_microbatch, model, input_tensor, losses_reduced
             )
-            self.send_forward_multi(output_tensor, tensor_shapes=send_tensor_shapes, dtypes=send_tensor_dtypes)
+            self.send_forward_multi(
+                output_tensor,
+                tensor_shapes=send_tensor_shapes,
+                dtypes=send_tensor_dtypes,
+            )
 
             if not forward_only:
                 self.input_tensors.append(input_tensor)
                 self.output_tensors.append(output_tensor)
 
         if self.info:
-            print('rank %d'%self.global_rank, 'finish forward')
+            print(f"{self.global_rank} finished forward")
         return losses_reduced
 
     def gpipe_backward(self):
         if self.info:
-            print('rank %d'%self.global_rank, 'start backward')
+            print(f"{self.global_rank} starting backwards")
 
-        # Run backward passes.
         for i in range(self.num_microbatches):
             input_tensor = self.input_tensors.pop(0)
             output_tensor = self.output_tensors.pop(0)
 
-            recv_tensor_shapes = self.stage_input_tensor_shape_last if i == self.num_microbatches - 1 else self.stage_input_tensor_shape
-            send_tensor_shapes = self.stage_output_tensor_shape_last if i == self.num_microbatches - 1 else self.stage_output_tensor_shape
+            if i == self.num_microbatches - 1:
+                recv_tensor_shapes = self.stage_input_tensor_shape_last
+                send_tensor_shapes = self.stage_output_tensor_shape_last
+            else:
+                recv_tensor_shapes = self.stage_input_tensor_shape
+                send_tensor_shapes = self.stage_output_tensor_shape
+
+            recv_tensor_dtypes = self.stage_input_tensor_dtype
+            send_tensor_dtypes = self.stage_output_tensor_dtype
+            output_tensor_grad = self.recv_backward_multi(
+                tensor_shapes=send_tensor_shapes, dtypes=send_tensor_dtypes
+            )
+
+    """
+
+    def gpipe_backward(self):
+        
             recv_tensor_dtypes = self.stage_input_tensor_dtype
             send_tensor_dtypes = self.stage_output_tensor_dtype
             output_tensor_grad = self.recv_backward_multi(tensor_shapes=send_tensor_shapes, dtypes=send_tensor_dtypes)

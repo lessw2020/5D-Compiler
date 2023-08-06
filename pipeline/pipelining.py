@@ -125,3 +125,66 @@ class PipelineParallel(nn.Module):
         self.dp_size_input = layer_dp_sizes[0]
         self.info = info
         self.chunk_warning = True
+
+    def check_tensor_dtype(
+        self, layer_output_tensor_shapes, layer_output_tensor_dtypes
+    ):
+        assert len(layer_output_tensor_shapes) == len(layer_output_tensor_dtypes)
+
+        for i in range(len(layer_output_tensor_shapes)):
+            if layer_output_tensor_shapes[i] is not None:
+                assert len(
+                    layer_output_tensor_shapes[i] == len(layer_output_tensor_dtypes[i])
+                )
+
+    def get_default_tensor_dtype(self, layer_output_tensor_shapes):
+        layer_output_tensor_dtypes = []
+        for tensor_shape in layer_output_tensor_shapes:
+            if tensor_shape is None:
+                layer_output_tensor_dtypes.append(None)
+            else:
+                layer_output_tensor_dtypes.append([torch.float] * len(tensor_shape))
+        return layer_output_tensor_dtypes
+
+    def wrap_pipeline_modules_data_parallel(self, dp_types, dp_groups, module_types):
+        assert self.total_model_len == len(dp_types)
+        assert self.total_model_len == len(dp_groups)
+        assert self.total_model_len == len(module_types)
+
+        dp_types_cur_stage = dp_types[self.stage_start_idx : self.stage_end_index]
+        module_types_cur_stage = dp_types[self.stage_start_idx : self.stage_end_index]
+        dp_groups_cur_stage = dp_groups[self.stage_start_idx : self.stage_end_index]
+        pp_devices_cur_stage = [self.local_rank] * (
+            self.stage_end_index - self.stage_start_idx
+        )
+        self.model_cur_stage = wrap_modules_data_parallel(
+            self.model_cur_stage,
+            dp_types_cur_stage,
+            dp_groups_cur_stage,
+            module_types=module_types_cur_stage,
+            pp_devices=pp_devices_cur_stage,
+        )
+
+    """
+
+
+    def wrap_pipeline_modules_data_parallel(self, dp_types, dp_groups, module_types):
+        assert(self.total_model_len == len(dp_types))
+        assert(self.total_model_len == len(dp_groups))
+        assert(self.total_model_len == len(module_types))
+        dp_types_cur_stage = dp_types[self.stage_start_idx:self.stage_end_idx]
+        module_types_cur_stage = module_types[self.stage_start_idx:self.stage_end_idx]
+        dp_groups_cur_stage = dp_groups[self.stage_start_idx:self.stage_end_idx]
+        pp_devices_cur_stage = [self.local_rank]*(self.stage_end_idx-self.stage_start_idx)
+        self.model_cur_stage = wrap_modules_data_parallel(self.model_cur_stage, dp_types_cur_stage, dp_groups_cur_stage, module_types=module_types_cur_stage, pp_devices=pp_devices_cur_stage)
+
+    def update_tensor_shape(self, microbatches, dp_size_input, dp_size, template_tensor_shape):
+        # Update tensor_shape with correct microbatch_size
+        tensor_shape, tensor_shape_last = copy.deepcopy(template_tensor_shape), copy.deepcopy(template_tensor_shape)
+        microbatch_size = microbatches[0][0][0].shape[0] * dp_size_input // dp_size
+        microbatch_size_last = microbatches[0][-1][0].shape[0] * dp_size_input // dp_size
+        for i in range(len(tensor_shape)):
+            tensor_shape[i][0] = microbatch_size
+            tensor_shape_last[i][0] = microbatch_size_last
+        return tensor_shape, tensor_shape_last
+"""

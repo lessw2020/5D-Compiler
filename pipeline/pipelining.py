@@ -309,45 +309,35 @@ class PipelineParallel(nn.Module):
                 tensor_shapes=send_tensor_shapes, dtypes=send_tensor_dtypes
             )
 
-    """
-
-    def gpipe_backward(self):
-        
-            recv_tensor_dtypes = self.stage_input_tensor_dtype
-            send_tensor_dtypes = self.stage_output_tensor_dtype
-            output_tensor_grad = self.recv_backward_multi(tensor_shapes=send_tensor_shapes, dtypes=send_tensor_dtypes)
-
             if self.num_microbatches > 1:
                 for m in self.model_cur_stage.modules():
-                    # For DDP module, we need to disable gradient sync for accumulation, 
-                    #   and set sync manually before backward of the last microbatch.
                     if isinstance(m, DDP) and i == self.num_microbatches - 1:
                         m.require_forward_param_sync = True
                         m.reducer.prepare_for_backward([])
-                    
-                    # For FSDP module, we need to disable post backward hooks for accumulation, 
-                    #   and register post backward hooks manually before backward of the last microbatch.
-                    if isinstance(m, FSDP):
+
+                    # for FSDP, need to disable post backward hooks for accumulation
+                    # and register manually before backward of last microbatch
+                    elif isinstance(m, FSDP):
                         if i == self.num_microbatches - 1:
                             m.training_state = TrainingState.IDLE
-                            m._post_backward_callback_queued = False # need to wait for post backward
-                            m._register_post_backward_hooks() # register post backward hook
+                            m._post_backward_callback_queued = False
+                            m._register_post_backward_hooks()
                         else:
                             for p in m.params:
                                 if not p.requires_grad:
                                     continue
                                 if hasattr(p, "_shard_bwd_hook"):
                                     p._shard_bwd_hook[1].remove()
-                                    delattr(p, "_shard_bwd_hook") # delete post backward hook
-                            m._post_backward_callback_queued = True # do not wait for post backward
-
+                                    delattr(p, "_shard_bwd_hook")
+                            m._post_bacward_callback_queued = True
             input_tensor_grad = self.backward_step(
-                input_tensor,
-                output_tensor,
-                output_tensor_grad,
+                input_tensor, output_tensor, output_tensor_grad
+            )
+            self.send_backward_multi(
+                input_tensor_grad,
+                tensor_shapes=recv_tensor_shapes,
+                dtypes=recv_tensor_dtypes,
             )
 
-            self.send_backward_multi(input_tensor_grad, tensor_shapes=recv_tensor_shapes, dtypes=recv_tensor_dtypes)
         if self.info:
-            print('rank %d'%self.global_rank, 'finish backward')
-    """
+            print(f"{self.global_rank} finished backwards")

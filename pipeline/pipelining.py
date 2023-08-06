@@ -85,45 +85,43 @@ class PipelineParallel(nn.Module):
             self.group_rank
         ), model_ranks.count(self.group_rank)
 
-        """
-        self.stage_end_idx = self.stage_start_idx + cnt
-        self.model_cur_stage = model[self.stage_start_idx : self.stage_end_idx].cuda(
+        self.stage_end_index = self.stage_start_idx + count
+        self.model_cur_stage = model[self.stage_start_idx : self.stage_end_index].cuda(
             self.local_rank
         )
         self.chunks = int(chunks)
         assert self.chunks >= 1
+
+        _stage_index = self.stage_start_idx - 1
+        _is_first_stage = self.is_pipeline_first_stage()
+        _is_last_stage = self.is_pipeline_last_stage()
+
         self.stage_input_tensor_shape = (
-            [None]
-            if self.is_pipeline_first_stage()
-            else layer_output_tensor_shapes[self.stage_start_idx - 1]
+            [None] if _is_first_stage else layer_output_tensor_shapes[_stage_index]
         )
-        self.stage_output_tensor_shape = (
-            [None]
-            if self.is_pipeline_last_stage()
-            else layer_output_tensor_shapes[self.stage_end_idx - 1]
+
+        self.stage_output_tensor_dtype = (
+            [None] if _is_first_stage else layer_output_tensor_dtypes[_stage_index]
         )
+
         self.stage_input_tensor_dtype = (
-            [None]
-            if self.is_pipeline_first_stage()
-            else layer_output_tensor_dtypes[self.stage_start_idx - 1]
+            [None] if _is_first_stage else layer_output_tensor_dtypes[_stage_index]
         )
+
         self.stage_output_tensor_dtype = (
             [None]
-            if self.is_pipeline_last_stage()
-            else layer_output_tensor_dtypes[self.stage_end_idx - 1]
+            if _is_last_stage
+            else layer_output_tensor_dtypes[self.stage_end_index - 1]
         )
+
         self.dp_size_prev_stage = (
-            None
-            if self.is_pipeline_first_stage()
-            else layer_dp_sizes[self.stage_start_idx - 1]
+            None if _is_first_stage else layer_dp_sizes[_stage_index]
         )
+
         self.dp_size_cur_stage = (
-            None
-            if self.is_pipeline_last_stage()
-            else layer_dp_sizes[self.stage_end_idx - 1]
+            None if _is_last_stage else layer_dp_sizes[self.stage_end_index - 1]
         )
 
         self.dp_size_input = layer_dp_sizes[0]
         self.info = info
         self.chunk_warning = True
-    """

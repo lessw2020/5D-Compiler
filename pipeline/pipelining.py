@@ -182,6 +182,163 @@ class PipelineParallel(nn.Module):
             tensor_shape_last[i][0] = microbatch_size_last
         return tensor_shape, tensor_shape_last
 
-    """
+    def gpipe_foward_backward(
+        self,
+        forward_step_func,
+        batch,
+        forward_only=False,
+    ):
+        """Runs gpipe schedule, with comms between pipeline stages.
+        Returns: dict with losses if last stage
+        """
+        losses_reduced = self.gpipe_forward(forward_step_func, batch, forward_only)
+        if not forward_only:
+            self.gpipe_backward()
+        return losses_reduced
 
-"""
+    def gpipe_forward(self, forward_step_func, batch, forward_only=False):
+        model = self.model_cur_stage
+        # create microbatches
+        microbatches = [
+            chunkify_batch(batch[0], self.chunks),
+            chunkify_batch(batch[1], self.chunks),
+        ]
+        self.real_chunks = len(microbatches[0])
+        if self.chunks != self.real_chunks and self.chunk_warning:
+            if self.global_rank == 0:
+                print(
+                    f"\nWarning from PipelineParallel Module: Real chunks is {self.real_chunks}, microbatch sizes are {[m[0].shape[0] for m in microbatches[0]]}"
+                )
+            self.chunk_warning = False
+        self.num_microbatches = self.real_chunks
+
+        # compute tensor shapes for all microbatches. last microbatch may have different size
+        batch_size = batch[0][0].shape[0] * self.dp_size_input
+
+        if self.is_pipeline_first_stage():
+            self.stage_input_tensor_shape = self.stage_input_tensor_shape_last = [None]
+        else:
+            (
+                self.stage_input_tensor_shape,
+                self.stage_input_tensor_shape_last,
+            ) = self.update_tensor_shape(
+                microbatches,
+                self.dp_size_input,
+                self.dp_size_prev_stage,
+                self.stage_input_tensor_shape,
+            )
+        if self.is_pipeline_last_stage():
+            self.stage_output_tensor_shape = self.stage_output_tensor_shape_last = [
+                None
+            ]
+        else:
+            (
+                self.stage_output_tensor_shape,
+                self.stage_output_tensor_shape_last,
+            ) = self.update_tensor_shape(
+                microbatches,
+                self.dp_size_input,
+                self.dp_size_cur_stage,
+                self.stage_output_tensor_shape,
+            )
+        self.input_tensors = []
+        self.output_tensors = []
+        losses_reduced = []
+
+        if self.info:
+            print(f"{self.global_rank}, starting pipeline forward")
+        
+        # Forward passes
+        for i in range(self.num_microbatches):
+            if i == self.num_microbatches-1:
+                recv_tensor_shapes = self.stage_input_tensor_shape_last
+                send_tensor_shapes = self.stage_output_tensor_shape_last
+            else:
+                recv_tensor_shapes = self.stage_input_tensor_shape
+                send_tensor_shapes = self.stage_output_tensor_shape
+            recv_tensor_dtypes = self.stage_input_tensor_dtype
+            send_tensor_dtypes = self.stage_output_tensor_dtype
+
+            input_tensor =self.recv_forward_multi(tensor_shapes = recv_tensor_shapes, dtypes = recv_tensor_dtypes)
+            cur_microbatch = [microbatches[0][i], microbatches[1][i]]
+
+            if self.num_microbatches > 1:
+
+
+    """
+    
+             cur_microbatch = [microbatches[0][i], microbatches[1][i]]
+
+            if self.num_microbatches > 1:
+                for m in self.model_cur_stage.modules():
+                    # For DDP module, we need to disable gradient sync for accumulation, 
+                    #   and set sync manually before backward of the last microbatch.
+                    if isinstance(m, DDP) and i == 0:
+                        m.require_backward_grad_sync = False
+            
+            output_tensor = self.forward_step(
+                forward_step_func,
+                cur_microbatch,
+                model,
+                input_tensor,
+                losses_reduced,
+            )
+            self.send_forward_multi(output_tensor, tensor_shapes=send_tensor_shapes, dtypes=send_tensor_dtypes)
+
+            if not forward_only:
+                self.input_tensors.append(input_tensor)
+                self.output_tensors.append(output_tensor)
+
+        if self.info:
+            print('rank %d'%self.global_rank, 'finish forward')
+        return losses_reduced
+
+    def gpipe_backward(self):
+        if self.info:
+            print('rank %d'%self.global_rank, 'start backward')
+
+        # Run backward passes.
+        for i in range(self.num_microbatches):
+            input_tensor = self.input_tensors.pop(0)
+            output_tensor = self.output_tensors.pop(0)
+
+            recv_tensor_shapes = self.stage_input_tensor_shape_last if i == self.num_microbatches - 1 else self.stage_input_tensor_shape
+            send_tensor_shapes = self.stage_output_tensor_shape_last if i == self.num_microbatches - 1 else self.stage_output_tensor_shape
+            recv_tensor_dtypes = self.stage_input_tensor_dtype
+            send_tensor_dtypes = self.stage_output_tensor_dtype
+            output_tensor_grad = self.recv_backward_multi(tensor_shapes=send_tensor_shapes, dtypes=send_tensor_dtypes)
+
+            if self.num_microbatches > 1:
+                for m in self.model_cur_stage.modules():
+                    # For DDP module, we need to disable gradient sync for accumulation, 
+                    #   and set sync manually before backward of the last microbatch.
+                    if isinstance(m, DDP) and i == self.num_microbatches - 1:
+                        m.require_forward_param_sync = True
+                        m.reducer.prepare_for_backward([])
+                    
+                    # For FSDP module, we need to disable post backward hooks for accumulation, 
+                    #   and register post backward hooks manually before backward of the last microbatch.
+                    if isinstance(m, FSDP):
+                        if i == self.num_microbatches - 1:
+                            m.training_state = TrainingState.IDLE
+                            m._post_backward_callback_queued = False # need to wait for post backward
+                            m._register_post_backward_hooks() # register post backward hook
+                        else:
+                            for p in m.params:
+                                if not p.requires_grad:
+                                    continue
+                                if hasattr(p, "_shard_bwd_hook"):
+                                    p._shard_bwd_hook[1].remove()
+                                    delattr(p, "_shard_bwd_hook") # delete post backward hook
+                            m._post_backward_callback_queued = True # do not wait for post backward
+
+            input_tensor_grad = self.backward_step(
+                input_tensor,
+                output_tensor,
+                output_tensor_grad,
+            )
+
+            self.send_backward_multi(input_tensor_grad, tensor_shapes=recv_tensor_shapes, dtypes=recv_tensor_dtypes)
+        if self.info:
+            print('rank %d'%self.global_rank, 'finish backward')
+    """

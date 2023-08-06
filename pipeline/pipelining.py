@@ -341,3 +341,81 @@ class PipelineParallel(nn.Module):
 
         if self.info:
             print(f"{self.global_rank} finished backwards")
+
+    def listify_(self, input_tensor):
+        if not isinstance(input_tensor, (list, tuple)):
+            input_tensor = [input_tensor]
+
+    def forward_step(
+        self,
+        forward_step_func,
+        batch,
+        model,
+        input_tensor,
+        losses_reduced,
+        loss_stage=False,
+    ):
+        """input tensor is from data_iterator for first stage, otherwise, input tensor passed in
+        returns output_tensor
+        """
+        unwrapped_model = unwrap_model(model)
+        self.listify_(input_tensor)
+
+        for x in input_tensor:
+            if x is not None and x.dtype == torch.float32:
+                x.requires_grad = True
+
+        if input_tensor[0] is None:
+            output_tensor, loss_func = forward_step_func(batch[0], model)
+        else:
+            output_tensor, loss_func = forward_step_func(input_tensor, model)
+
+        if self.is_pipeline_last_stage():
+            self.listify_(output_tensor)
+            output_tensor = loss_func(batch[1], output_tensor)
+            loss = output_tensor
+            output_tensor = loss / self.real_chunks
+            losses_reduced.append(loss)
+            return output_tensor
+
+    def backward_step(self, input_tensor, output_tensor, output_tensor_grad):
+        """backwards via output_tensor
+        Returns gradient of loss with respect to input tensor (None if first
+        stage)
+        """
+
+        # self.listify_(input_tensor)
+        unwrap_input_tensor_grad = not isinstance(input_tensor, list)
+        if unwrap_input_tensor_grad:
+            input_tensor = [input_tensor]
+        i
+        input_tensor = [
+            None if t is None or not t.requires_grad else t for t in input_tensor
+        ]
+        for x in input_tensor:
+            if x is not None:
+                x.retain_grad()
+
+        self.listify_(output_tensor)
+        self.listify_(output_tensor_grad)
+
+        # backward pass
+        output_tensor_, output_tensor_grad_ = [], []
+        for t, g in zip(output_tensor, output_tensor_grad):
+            if t is not None and t.requires_grad():
+                output_tensor_.append(t)
+                output_tensor_grad_.append(g)
+        torch.autograd.backward(output_tensor_, grad_tensors=output_tensor_grad_)
+
+        # collect grads
+        input_tensor_grad = [None]
+        if input_tensor is not None:
+            input_tensor_grad = []
+            for x in input_tensor:
+                input_tensor_grad.append(None if x is None else x.grad)
+
+        return input_tensor_grad[0] if unwrap_input_tensor_grad else input_tensor_grad
+
+    """ 
+    
+    """

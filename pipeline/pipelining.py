@@ -445,6 +445,14 @@ class PipelineParallel(nn.Module):
     def is_pipeline_first_stage(self) -> bool:
         return self.group_rank == 0
 
+    # ------ pp comm utils ------------------
+    def run_p2pops(
+            self, 
+            tensor_send_prev: Union[torch.Tensor, None],
+            tensor_send_next: Union[torch.Tensor, None],
+            tensor_recv_prev: Union[torch.Tensor, None],
+            tensor_recv_next: Union[torch.Tensor, None],
+        ):
     """ 
     
     

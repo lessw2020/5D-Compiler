@@ -165,26 +165,23 @@ class PipelineParallel(nn.Module):
             pp_devices=pp_devices_cur_stage,
         )
 
-    """
+    def update_tensor_shape(
+        self, microbatches, dp_size_input, dp_size, template_tensor_shape
+    ):
+        """update tensor_shape with correct microbatch size"""
+        dp_chunk = dp_size_input // dp_size
 
+        tensor_shape, tensor_shape_last = copy.deepcopy(
+            template_tensor_shape
+        ), copy.deepcopy(template_tensor_shape)
+        microbatch_size = microbatches[0][0][0].shape[0] * dp_chunk
+        microbatch_size_last = microbatches[0][-1][0].shape[0] * dp_chunk
 
-    def wrap_pipeline_modules_data_parallel(self, dp_types, dp_groups, module_types):
-        assert(self.total_model_len == len(dp_types))
-        assert(self.total_model_len == len(dp_groups))
-        assert(self.total_model_len == len(module_types))
-        dp_types_cur_stage = dp_types[self.stage_start_idx:self.stage_end_idx]
-        module_types_cur_stage = module_types[self.stage_start_idx:self.stage_end_idx]
-        dp_groups_cur_stage = dp_groups[self.stage_start_idx:self.stage_end_idx]
-        pp_devices_cur_stage = [self.local_rank]*(self.stage_end_idx-self.stage_start_idx)
-        self.model_cur_stage = wrap_modules_data_parallel(self.model_cur_stage, dp_types_cur_stage, dp_groups_cur_stage, module_types=module_types_cur_stage, pp_devices=pp_devices_cur_stage)
-
-    def update_tensor_shape(self, microbatches, dp_size_input, dp_size, template_tensor_shape):
-        # Update tensor_shape with correct microbatch_size
-        tensor_shape, tensor_shape_last = copy.deepcopy(template_tensor_shape), copy.deepcopy(template_tensor_shape)
-        microbatch_size = microbatches[0][0][0].shape[0] * dp_size_input // dp_size
-        microbatch_size_last = microbatches[0][-1][0].shape[0] * dp_size_input // dp_size
         for i in range(len(tensor_shape)):
             tensor_shape[i][0] = microbatch_size
             tensor_shape_last[i][0] = microbatch_size_last
         return tensor_shape, tensor_shape_last
+
+    """
+
 """

@@ -416,6 +416,36 @@ class PipelineParallel(nn.Module):
 
         return input_tensor_grad[0] if unwrap_input_tensor_grad else input_tensor_grad
 
+    # ------- pipeline rank utils --------------------
+    def get_pipeline_mp_first_rank(
+        self,
+    ):
+        return self.pp_global_ranks[0]
+
+    def get_pipeline_mp_last_rank(
+        self,
+    ):
+        last_rank_local = self.group_size - 1
+        return self.pp_global_ranks[last_rank_local]
+
+    def get_pipeline_mp_next_rank(
+        self,
+    ):
+        rank_in_pipeline = self.group_rank
+        world_size = self.group_size
+        return self.pp_global_ranks[(rank_in_pipeline + 1) % world_size]
+
+    def get_pipeline_mp_prev_rank(
+        self,
+    ):
+        rank_in_pipeline = self.group_rank
+        world_size = self.group_size
+        return self.pp_global_ranks[(rank_in_pipeline - 1) % world_size]
+
+    def is_pipeline_first_stage(self) -> bool:
+        return self.group_rank == 0
+
     """ 
+    
     
     """

@@ -671,7 +671,49 @@ class PipelineParallel(nn.Module):
             dtype_=dtype,
         )
 
+    def send_forward_recv_backward(
+        self,
+        output_tensor: torch.Tensor,
+        tensor_shape: Shape,
+        *,
+        dtype: Optional[torch.dtype] = None,
+    ) -> Union[None, torch.Tensor]:
+        """two way forward with next rank - send forward, receive backward"""
+        if self.is_pipeline_last_stage():
+            return None
+        output_tensor_grad = self.communicate(
+            tensor_send_next=output_tensor,
+            tensor_send_prev=None,
+            recv_prev=False,
+            recv_next=True,
+            tensor_shape=tensor_shape,
+            dtype_=dtype,
+        )
+        return output_tensor_grad
+
+    def send_backward_recv_forward(
+        self,
+        input_tensor_grad: torch.Tensor,
+        tensor_shape: Shape,
+        *,
+        dtype: Optional[torch.dtype] = None,
+    ) -> Union[None, torch.Tensor]:
+        """two way backward with prev rank - send backward, receive forward"""
+        if self.is_pipeline_last_stage():
+            return None
+        input_tensor, _ = self.communicate(
+            tensor_send_next=None,
+            tensor_send_prev=input_tensor_grad,
+            recv_prev=True,
+            recv_next=False,
+            tensor_shape=tensor_shape,
+            dtype_=dtype,
+        )
+        return input_tensor
+
     """ 
+    
+
     
         
         

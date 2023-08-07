@@ -487,6 +487,70 @@ class PipelineParallel(nn.Module):
             for req in reqs:
                 req.wait()
 
+    def communicate(
+        self,
+        tensor_send_next: Optional[torch.Tensor],
+        tensor_send_prev: Optional[torch.Tensor],
+        recv_prev: bool,
+        recv_next: bool,
+        tensor_shape: Optional[Shape] = None,
+        override_scatter_gather_tensors_in_pipeline: bool = False,
+        dtype_: Optional[torch.dtype] = None,
+        *,
+        scatter_gather_tensors_in_pipeline: bool = False,
+        params_dtype: Optional[torch.dtype] = None,
+        fp32_residual_connection: bool = False,
+    ) -> Tuple[Union[torch.Tensor, None], Union[torch.Tensor, None]]:
+        """Main function for comm of tensor between stages"""
+        tensor_recv_prev = None
+        tensor_recv_next = None
+        if tensor_shape is None:
+            raise RuntimeError(
+                "tensor shape must be speced. Usually (seq_length, microbatch_size, hidden_size)"
+            )
+        if (
+            not override_scatter_gather_tensors_in_pipeline
+            and scatter_gather_tensors_in_pipeline
+        ):
+            assert False, f"not implemented yet"
+            # tensor_chunk_shape = (
+            #    reduce(operator.mul, tensor_shape, 1)
+            #    // self.get_tensor_model_parallel_world_size(),
+            # )
+        else:
+            tensor_chunk_shape = tensor_shape
+
+        # from Megatron-LM
+        dtype = params_dtype or torch.float
+        if fp32_residual_connection:
+            dtype = torch.float
+        requires_grad = True
+        if dtype_ is not None:
+            dtype = dtype_
+            requires_grad = False
+
+        if recv_prev:
+            tensor_recv_prev = torch.empty(
+                tensor_chunk_shape,
+                requires_grad=requires_grad,
+                device=torch.cuda.current_device(),
+                dtype=dtype,
+            )
+
+        if recv_next:
+            tensor_recv_next = torch.empty(
+                tensor_chunk_shape,
+                requires_grad=requires_grad,
+                device=torch.cuda.current_device(),
+                dtype=dtype,
+            )
+
+    """ 
+     
+        
+        
+    """
+
 
 class PipeSequential(nn.Sequential):
     """pipeline variant of nn.sequential"""
@@ -498,9 +562,3 @@ class PipeSequential(nn.Sequential):
             else:
                 inputs = module(inputs)
         return inputs
-
-    """ 
-    
-    
-    
-    """

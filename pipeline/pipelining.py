@@ -769,13 +769,129 @@ class PipelineParallel(nn.Module):
         )
         return input_tensor, output_tensor_grad
     
-    """ 
+    def recv_forward_multi(self, 
+                           tensor_shapes: List[Union[None, List[int]]], 
+                           *, 
+                           dtypes=None,)-> List[Union[None, torch.Tensor]]:
+        if dtypes is not None:
+            assert len(dtypes) == len(tensor_shapes)
+        input_tensors = []
+        for i in range(len(tensor_shapes)):
+            tensor_shape = tensor_shapes[i]
+            dtype = None if dtypes is None else dtypes[i]
+            if tensor_shape is None:
+                input_tensors.append(None)
+            else:
+                input_tensors.append(self.recv_forward(tensor_shape=tensor_shape,dtype=dtype))
+
+        return input_tensors
     
+    def recv_backward_multi(self, 
+                           tensor_shapes: List[Union[None, List[int]]], 
+                           *, 
+                           dtypes=None,)-> List[Union[None, torch.Tensor]]:
+        if dtypes is not None:
+            assert len(dtypes) == len(tensor_shapes)
+        output_tensor_grads = []
+        for i in range(len(tensor_shapes)):
+            tensor_shape = tensor_shapes[i]
+            dtype = None if dtypes is None else dtypes[i]
+            if tensor_shape is None:
+                output_tensor_grads.append(None)
+            else:
+                output_tensor_grads.append(self.recv_backward(tensor_shape=tensor_shape, dtype=dtype))
+        return output_tensor_grads
+    
+    def send_forward_multi(self, 
+                           output_tensors: Union[torch.Tensor, List[Union[None, torch.Tensor]]],
+                           tensor_shapes: List[Union[None, List[int]]], 
+                           *, 
+                           dtypes=None,)-> None:
+        if not isinstance(output_tensors, list):
+            output_tensors = [output_tensors]
+        if dtypes is not None:
+            assert len(dtypes) == len(tensor_shapes)
+        for i, tensor_shape in enumerate(tensor_shapes):
+            if tensor_shape is None:
+                continue
+            output_tensor = output_tensors[i]
+            dtype = None if dtypes is None else dtypes[i]
+            self.send_forward(output_tensor=output_tensor, tensor_shape=tensor_shape, dtype=dtype)
 
-        
-        
-    """
+    def ensure_list(self, item):
+        if not isinstance(item, list):
+            item = [item]
 
+    def send_backward_multi(
+            self,
+            input_tensor_grads: Union[torch.Tensor, List[Union[None, torch.Tensor]]],
+            tensor_shapes: List[Union[None, List[int]]],
+            *,
+            dtypes=None,
+    )-> None:
+        if not isinstance(input_tensor_grads, list):
+            input_tensor_grads = [input_tensor_grads]
+        if dtypes is not None:
+            assert len(dtypes) == len(tensor_shapes)
+        
+        for i in range(len(tensor_shapes)):
+            tensor_shape = tensor_shapes[i]
+            if tensor_shape is None:
+                continue
+            input_tensor_grad = input_tensor_grads[i]
+            dtype = None if dtypes is None else dtypes[i]
+            if input_tensor_grad is None and tensor_shape is not None:
+                input_tensor_grad = torch.zeros(tensor_shape, dtype=dtype).cuda(self.local_rank)
+            self.send_backward(input_tensor_grad, tensor_shape=tensor_shape, dtype=dtype)
+
+    def send_forward_recv_backward_multi(
+        self, 
+        output_tensors: Union[torch.Tensor, List[Union[None, torch.Tensor]]],
+        tensor_shapes: List[Union[None, List[int]]],
+        *,
+        dtypes=None,
+    )-> List[Union[None, torch.Tensor]]:
+        self.ensure_list(output_tensors)
+        if dtypes:
+            assert len(dtypes) == len(tensor_shapes)
+        output_tensor_grads = []
+        for i in range(len(tensor_shapes)):
+            tensor_shape, output_tensor = tensor_shapes[i], output_tensors[i]
+            if tensor_shape is None:
+                output_tensor_grads.append(None)
+                continue
+            dtype = None if dtypes is None else dtypes[i]
+            if output_tensor is None and tensor_shape is not None:
+                output_tensor = torch.zeros(tensor_shape, dtype=dtype).cuda(self.local_rank)
+            output_tensor_grad = self.send_forward_recv_backward(output_tensor, tensor_shape=tensor_shape, dtype=dtype)
+        
+        return output_tensor_grads
+    
+    def send_backward_recv_forward_multi(
+            self,
+            input_tensor_grads: Union[torch.Tensor, List[Union[None, torch.Tensor]]],
+            tensor_shapes: List[Union[None, List[int]]],
+            *,
+            dtypes=None,
+    )-> List[Union[None, torch.Tensor]]:
+        self.ensure_list(input_tensor_grads)
+        if dtypes is not None:
+            assert len(dtypes) == len(tensor_shapes)
+        input_tensors = []
+
+        for i in range(len(tensor_shapes)):
+            tensor_shape = tensor_shapes[i]
+            if tensor_shape is None:
+                input_tensors.append(None)
+                continue
+            input_tensor_grad = input_tensor_grads[i]
+            dtype = None if dtypes is None else dtypes[i]
+            if input_tensor_grad is None and tensor_shape is not None:
+                input_tensor_grad = torch.zeros(tensor_shape, dtype=dtype).cuda(self.local_rank)
+            input_tensor = self.send_backward_recv_forward(input_tensor_grad, tensor_shape=tensor_shape, dtype=dtype)
+            input_tensors.append(input_tensor)
+        return input_tensors
+        
 
 class PipeSequential(nn.Sequential):
     """pipeline variant of nn.sequential"""

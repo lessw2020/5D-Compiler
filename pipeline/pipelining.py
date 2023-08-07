@@ -545,8 +545,56 @@ class PipelineParallel(nn.Module):
                 dtype=dtype,
             )
 
+        if (
+            not override_scatter_gather_tensors_in_pipeline
+            and scatter_gather_tensors_in_pipeline
+        ):
+            if tensor_send_next is not None:
+                tensor_send_next = split_tensor_into_1d_equal_chunks(tensor_send_next)
+
+            if tensor_send_prev is not None:
+                tensor_send_prev = split_tensor_into_1d_equal_chunks(tensor_send_prev)
+
+        commtype = p2p_type(
+            tensor_send_prev, tensor_send_next, tensor_recv_prev, tensor_recv_next
+        )
+
+        if self.info:
+            print(f"{self.global_rank} starting p2p with {commtype=}")
+
+        # send tensors forward and backward
+        self.run_p2pops(
+            tensor_send_prev, tensor_send_next, tensor_recv_prev, tensor_recv_next
+        )
+        # protect from race when using batch_isend_irecv:
+        torch.cuda.synchronize()
+
+        if self.info:
+            print(f"{self.global_rank} finished p2p, {commtype=}")
+
+        if (
+            not override_scatter_gather_tensors_in_pipeline
+            and scatter_gather_tensors_in_pipeline
+        ):
+            if recv_prev:
+                tensor_recv_prev = (
+                    gather_split_1d_tensor(tensor_recv_prev)
+                    .view(tensor_shape)
+                    .requires_grad_()
+                )
+            if recv_next:
+                tensor_recv_next = (
+                    gather_split_1d_tensor(tensor_recv_next)
+                    .view(tensor_shape)
+                    .requires_grad_()
+                )
+
+        return tensor_recv_prev, tensor_recv_next
+
     """ 
-     
+    
+
+
         
         
     """

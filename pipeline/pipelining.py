@@ -591,9 +591,48 @@ class PipelineParallel(nn.Module):
 
         return tensor_recv_prev, tensor_recv_next
 
+    def recv_forward(
+        self,
+        tensor_shape: Shape,
+        override_scatter_gather_tensors_in_pipeline: bool = False,
+        *,
+        dtype: Optional[torch.dtype] = None,
+    ) -> torch.Tensor:
+        """Receive tensor from previous rank in pipeline (fwd recv)"""
+        if self.is_pipeline_first_stage():
+            return None
+        input_tensor, _ = self.communicate(
+            tensor_send_next=None,
+            tensor_send_prev=None,
+            recv_prev=True,
+            recv_next=False,
+            tensor_shape=tensor_shape,
+            override_scatter_gather_tensors_in_pipeline=override_scatter_gather_tensors_in_pipeline,
+            dtype_=dtype,
+        )
+        return input_tensor
+
+    def recv_backward(
+        self,
+        tensor_shape: Shape = None,
+        *,
+        dtype: Optional[torch.dtype] = None,
+    ) -> torch.Tensor:
+        """recv tensor from next rank in pipeline (backward receive)"""
+        if self.is_pipeline_last_stage():
+            return None
+        _, output_tensor_grad = self.communicate(
+            tensor_send_next=None,
+            tensor_send_prev=None,
+            recv_prev=False,
+            recv_next=True,
+            tensor_shape=tensor_shape,
+            dtype_=dtype,
+        )
+        return output_tensor_grad
+
     """ 
     
-
 
         
         

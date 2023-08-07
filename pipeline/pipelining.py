@@ -487,6 +487,18 @@ class PipelineParallel(nn.Module):
             for req in reqs:
                 req.wait()
 
+
+class PipeSequential(nn.Sequential):
+    """pipeline variant of nn.sequential"""
+
+    def forward(self, *inputs):
+        for module in self:
+            if isinstance(inputs, Tuple):
+                inputs = module(*inputs)
+            else:
+                inputs = module(inputs)
+        return inputs
+
     """ 
     
     

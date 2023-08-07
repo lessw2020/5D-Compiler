@@ -447,13 +447,48 @@ class PipelineParallel(nn.Module):
 
     # ------ pp comm utils ------------------
     def run_p2pops(
-            self, 
-            tensor_send_prev: Union[torch.Tensor, None],
-            tensor_send_next: Union[torch.Tensor, None],
-            tensor_recv_prev: Union[torch.Tensor, None],
-            tensor_recv_next: Union[torch.Tensor, None],
-        ):
+        self,
+        tensor_send_prev: Union[torch.Tensor, None],
+        tensor_send_next: Union[torch.Tensor, None],
+        tensor_recv_prev: Union[torch.Tensor, None],
+        tensor_recv_next: Union[torch.Tensor, None],
+    ):
+        ops = []
+        if tensor_send_prev is not None:
+            send_prev_op = dist.P2POp(
+                dist.isend,
+                tensor_send_prev,
+                self.get_pipeline_mp_prev_rank(),
+            )
+            ops.append(send_prev_op)
+
+        if tensor_recv_prev is not None:
+            recv_prev_op = dist.P2POp(
+                dist.irecv,
+                tensor_recv_prev,
+                self.get_pipeline_mp_prev_rank(),
+            )
+            ops.append(recv_prev_op)
+
+        if tensor_send_next is not None:
+            send_next_op = dist.P2POp(
+                dist.isend, tensor_send_next, self.get_pipeline_mp_next_rank()
+            )
+            ops.append(send_next_op)
+
+        if tensor_recv_next is not None:
+            recv_next_op = dist.P2POp(
+                dist.irecv, tensor_recv_next, self.get_pipeline_mp_next_rank()
+            )
+            ops.append(recv_next_op)
+
+        if len(ops):
+            reqs = dist.batch_isend_irecv(ops)
+            for req in reqs:
+                req.wait()
+
     """ 
+    
     
     
     """

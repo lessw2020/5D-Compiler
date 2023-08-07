@@ -710,11 +710,68 @@ class PipelineParallel(nn.Module):
             dtype_=dtype,
         )
         return input_tensor
+    
+    def send_forward_recv_forward(
+            self, 
+            output_tensor: torch.Tensor,
+            recv_prev: bool,
+            tensor_shape: Shape,
+            *,
+            dtype: Optional[torch.dtype]=None,
+    )
+        """batched recv from prev, forward to next rank"""
+        input_tensor,_ = self.communicate(
+            tensor_send_next=output_tensor,
+            tensor_send_prev=None,
+            recv_prev = recv_prev,
+            recv_next = False,
+            tensor_shape = tensor_shape,
+            dtype_=dtype
+        )
+        return input_tensor
+    
+    def send_backward_recv_backward(self,
+                                    input_tensor_grad: torch.Tensor,
+                                    recv_next: bool,
+                                    tensor_shape: Shape,
+                                    *,
+                                    dtype: Optional[torch.dtype]=None,)->torch.Tensor:
+        """batch recv backward from next rank, send to prev rank"""
+        _, output_tensor_grad = self.communicate(
+            tensor_send_next=None,
+            tensor_send_prev = input_tensor_grad,
+            recv_prev=False,
+            recv_next=recv_next,
+            tensor_shape = tensor_shape,
+            dtype_=dtype,
 
+        )
+        return output_tensor_grad
+    
+    def send_forward_backward_recv_forward_backward(
+            self,
+            output_tensor: torch.Tensor,
+            input_tensor_grad: torch.Tensor,
+            recv_prev: bool,
+            recv_next: bool,
+            tensor_shape: Shape,
+            *,
+            dtype: Optional[torch.dtype]=None,)->Tuple[torch.Tensor, torch.Tensor]:
+        """Batched send and recv with both prev and next ranks"""
+        input_tensor, output_tensor_grad = self.communicate(
+            tensor_send_next=output_tensor,
+            tensor_send_prev=input_tensor_grad,
+            recv_prev=recv_prev,
+            recv_next=recv_next,
+            tensor_shape = tensor_shape,
+            dtype_=dtype,
+
+        )
+        return input_tensor, output_tensor_grad
+    
     """ 
     
 
-    
         
         
     """
